@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    concurrency:
+      group: release
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GPG_FINGERPRINT: 59E2D7E1C4AEFA9F891A5845C5EE073709C7B615
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@7d2730e317c8366225b42fced34583b26440a9cc
+        with:
+          go-version-file: go.mod
+
+      - name: Validate release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$GITHUB_REF" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Release must run from a stable version tag (vX.Y.Z)" >&2
+            exit 1
+          fi
+
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${GITHUB_REF_NAME}"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -race ./...
+
+      - name: Scan for known vulnerabilities
+        run: go tool govulncheck ./...
+
+      - name: Install GoReleaser
+        env:
+          GORELEASER_VERSION: "2.20.1"
+          GORELEASER_SHA256: "79e0589ca9efd70e8db85158a21334cbb57811d4034b39b61d55789f361341a5"
+        run: |
+          set -euo pipefail
+          goreleaser_archive="${RUNNER_TEMP}/goreleaser.tar.gz"
+          curl -fsSLo "${goreleaser_archive}" \
+            "https://github.com/goreleaser/goreleaser/releases/download/v${GORELEASER_VERSION}/goreleaser_Linux_x86_64.tar.gz"
+          echo "${GORELEASER_SHA256}  ${goreleaser_archive}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/goreleaser"
+          tar -xzf "${goreleaser_archive}" -C "${RUNNER_TEMP}/goreleaser"
+          rm "${goreleaser_archive}"
+
+      - name: Install syft
+        env:
+          SYFT_VERSION: "1.51.0"
+          SYFT_SHA256: "2a2e837a2c8d59ec9af5472ee22d3b04ee463c4e44476ecf993fd1e5ab6ebc7f"
+        run: |
+          set -euo pipefail
+          syft_archive="${RUNNER_TEMP}/syft.tar.gz"
+          curl -fsSLo "${syft_archive}" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${syft_archive}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/syft"
+          tar -xzf "${syft_archive}" -C "${RUNNER_TEMP}/syft"
+          rm "${syft_archive}"
+          sudo mv "${RUNNER_TEMP}/syft/syft" /usr/local/bin/
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+          echo "use-agent" >> ~/.gnupg/gpg.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent
+          gpgconf --launch gpg-agent
+          gpg --batch --list-secret-keys "${GPG_FINGERPRINT}" > /dev/null
+
+      - name: Run GoReleaser
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: ${{ steps.tag.outputs.tag }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_TTY: dummy
+        run: |
+          set -euo pipefail
+
+          "${RUNNER_TEMP}/goreleaser/goreleaser" release --clean

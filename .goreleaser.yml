@@ -1,0 +1,68 @@
+version: 2
+
+builds:
+  - id: govulncheckignore
+    main: ./main.go
+    binary: govulncheckignore
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - "-s -w"
+      - "-X main.version={{.Tag}}"
+      - "-X main.commit={{.ShortCommit}}"
+      - "-X main.releaseDate={{.Date}}"
+
+archives:
+  - id: govulncheckignore
+    ids: [govulncheckignore]
+    formats: ["tar.gz"]
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+    name_template: "{{ .Binary }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+
+sboms:
+  - id: archives
+    artifacts: archive
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^ci:"
+      - "^fix(ci):"
+      - "^docs:"
+      - "^test:"
+      - "^Merge "
+      - "^chore(deps):"
+
+checksum:
+  algorithm: sha256
+
+release:
+  github:
+    owner: pixel365
+    name: govulncheckignore
+  draft: false
+
+signs:
+  - artifacts: all
+    cmd: gpg
+    signature: "${artifact}.sig"
+    args:
+      - --batch
+      - --local-user
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - --output
+      - "${signature}"
+      - --armor
+      - --detach-sign
+      - --pinentry-mode
+      - loopback
+      - --passphrase-fd
+      - "0"
+      - "${artifact}"
+    stdin: "{{ .Env.GPG_PASSPHRASE }}"
+    env:
+      - GPG_PASSPHRASE
+      - GPG_FINGERPRINT
