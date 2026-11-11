@@ -48,7 +48,7 @@ jobs:
           echo "Releasing ${GITHUB_REF_NAME}"
 
       - name: Build
-        run: go build ./...
+        run: go build -o "${RUNNER_TEMP}/govulncheckignore" .
 
       - name: Run go vet
         run: go vet ./...
